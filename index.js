@@ -1,10 +1,15 @@
 const express = require('express');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
+const fs = require('fs');
+const path = require('path');
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+
+// Torna a pasta /tmp pública para que o Instagram consiga baixar a imagem gerada temporariamente
+app.use('/temp', express.static('/tmp'));
 
 app.post('/gerar-card', async (req, res) => {
   const { titulo, subtitulo, imagemUrl, textoMateria } = req.body;
@@ -14,8 +19,8 @@ app.post('/gerar-card', async (req, res) => {
   }
 
   const API_KEY = process.env.GEMINI_API_KEY; 
-  const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN; // Token do Instagram configurado nas variáveis de ambiente do Render
-  const IG_USER_ID = process.env.IG_USER_ID;           // ID da conta do Instagram Business no Render
+  const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN; 
+  const IG_USER_ID = process.env.IG_USER_ID;           
 
   let browser = null;
   try {
@@ -77,6 +82,14 @@ app.post('/gerar-card', async (req, res) => {
     const imageBuffer = await page.screenshot({ type: 'png' });
     await browser.close();
 
+    // Salva a imagem temporariamente no diretório /tmp do Render
+    const fileName = `card-${Date.now()}.png`;
+    const tempFilePath = path.join('/tmp', fileName);
+    fs.writeFileSync(tempFilePath, imageBuffer);
+
+    // URL pública temporária para o Instagram baixar a imagem
+    const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
+
     // 1. Gerar legenda com o Gemini
     let textoLimpo = textoMateria ? textoMateria.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim() : '';
     const prompt = `Escreva uma legenda em Português do Brasil com base na matéria abaixo.
@@ -112,22 +125,54 @@ ${textoLimpo.substring(0, 1000)}`;
 
     if (!legendaFinal) legendaFinal = `${titulo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\n#CentralGoiano #Noticias #Goias`;
 
-    // 2. Postar no Instagram automaticamente (via Instagram Graph API)
-    // Nota: Para subir imagem diretamente via buffer para o Instagram, normalmente hospeda-se temporariamente 
-    // ou envia-se para um bucket S3/Imgur, ou utiliza-se o fluxo oficial da API do Instagram.
-    // Aqui simulamos a chamada caso você tenha a imagem hospedada ou utilize um container de mídia.
-    // Dica: Certifique-se de configurar IG_ACCESS_TOKEN e IG_USER_ID nas variáveis de ambiente do Render.
-    
-    let instagramStatus = "Ignorado (configure IG_ACCESS_TOKEN e IG_USER_ID)";
+    // 2. Enviar para o Instagram (Instagram Graph API)
+    let instagramStatus = "Sucesso";
     if (IG_ACCESS_TOKEN && IG_USER_ID) {
-      // Exemplo básico de fluxo da API do Instagram (Criação de container de mídia e publicação)
-      // Como a API oficial exige uma URL pública de imagem, você pode integrar um serviço rápido de upload se necessário.
-      console.log("Token do Instagram detectado. Pronto para publicar.");
+      try {
+        // Passo A: Criar o Container de Mídia no Instagram
+        const mediaUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media`;
+        const resMedia = await fetch(mediaUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_url: publicImageUrl,
+            caption: legendaFinal,
+            access_token: IG_ACCESS_TOKEN
+          })
+        });
+        const dataMedia = await resMedia.json();
+
+        if (dataMedia.id) {
+          const creationId = dataMedia.id;
+
+          // Passo B: Publicar a Mídia Criada
+          const publishUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media_publish`;
+          const resPublish = await fetch(publishUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              creation_id: creationId,
+              access_token: IG_ACCESS_TOKEN
+            })
+          });
+          const dataPublish = await resPublish.json();
+          console.log("Postado no Instagram com ID:", dataPublish.id);
+        } else {
+          console.error("Erro ao criar container no Instagram:", dataMedia);
+          instagramStatus = "Erro ao criar container: " + JSON.stringify(dataMedia);
+        }
+      } catch (igErr) {
+        console.error("Erro na API do Instagram:", igErr);
+        instagramStatus = "Erro: " + igErr.toString();
+      }
+    } else {
+      instagramStatus = "Tokens do Instagram não encontrados nas variáveis de ambiente";
     }
 
     res.json({
       sucesso: true,
-      mensagem: "Card gerado e fluxo executado com sucesso!",
+      mensagem: "Card gerado e fluxo concluído!",
+      instagram: instagramStatus,
       legenda: legendaFinal
     });
 
