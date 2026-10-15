@@ -1,5 +1,6 @@
 const express = require('express');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -13,19 +14,13 @@ app.post('/gerar-card', async (req, res) => {
 
   let browser = null;
   try {
-    // Lançamento otimizado para o ambiente do Render
+    const executablePath = await chromium.executablePath();
+
     browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--no-zygote',
-        '--single-process'
-      ]
+      args: chromium.args,
+      defaultViewport: { width: 1080, height: 1350, deviceScaleFactor: 2 },
+      executablePath: executablePath,
+      headless: chromium.headless,
     });
 
     const page = await browser.newPage();
