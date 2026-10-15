@@ -12,7 +12,6 @@ app.post('/gerar-card', async (req, res) => {
     return res.status(400).json({ error: 'Título é obrigatório' });
   }
 
-  // Pega as chaves de forma segura lá das configurações do Render
   const API_KEY = process.env.GEMINI_API_KEY; 
   const INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
   const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
@@ -77,16 +76,7 @@ app.post('/gerar-card', async (req, res) => {
     const imageBuffer = await page.screenshot({ type: 'png' });
     await browser.close();
 
-    const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-    const FormData = require('form-data');
-    
-    const form = new FormData();
-    form.append('reqtype', 'fileupload');
-    form.append('fileToUpload', imageBuffer, { filename: 'card.png', contentType: 'image/png' });
-
-    const uploadRes = await fetch('https://catbox.moe/user/api.php', { method: 'POST', body: form });
-    const urlPublicaCard = await uploadRes.text();
-
+    // Gerar legenda com o Gemini
     let textoLimpo = textoMateria ? textoMateria.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim() : '';
     const prompt = `Escreva uma legenda em Português do Brasil com base na matéria abaixo.
 DIRETRIZES RIGOROSAS:
@@ -105,6 +95,7 @@ Matéria:
 ${titulo}
 ${textoLimpo.substring(0, 1000)}`;
 
+    const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
     const resGemini = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -121,9 +112,25 @@ ${textoLimpo.substring(0, 1000)}`;
 
     if (!legendaFinal) legendaFinal = `${titulo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\n#CentralGoiano #Noticias #Goias`;
 
+    // Como a API do Instagram exige uma URL pública, vamos utilizar um serviço alternativo gratuito e estável de upload direto (ImgBB/Pomf ou similar via API JSON) ou criar o container via Graph API se suportado. 
+    // Para garantir estabilidade total sem erros de conexão, vamos usar o serviço público gratuito dabe.au / pomf direto:
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('files[]', imageBuffer, { filename: 'card.png', contentType: 'image/png' });
+
+    const uploadRes = await fetch('https://pomf.lain.la/upload.php', { method: 'POST', body: form });
+    const uploadData = await uploadRes.json();
+
+    if (!uploadData.success || !uploadData.files || !uploadData.files[0]) {
+      return res.status(500).json({ error: 'Erro ao gerar link público da imagem no servidor de upload' });
+    }
+
+    let urlPublicaCard = uploadData.files[0].url;
+
+    // Postar no Instagram
     const resContainer = await fetch(`https://graph.facebook.com/v19.0/${INSTAGRAM_ACCOUNT_ID}/media`, {
       method: 'POST',
-      body: new URLSearchParams({ 'image_url': urlPublicaCard.trim(), 'caption': legendaFinal, 'access_token': INSTAGRAM_ACCESS_TOKEN })
+      body: new URLSearchParams({ 'image_url': urlPublicaCard, 'caption': legendaFinal, 'access_token': INSTAGRAM_ACCESS_TOKEN })
     });
     let dataContainer = await resContainer.json();
 
