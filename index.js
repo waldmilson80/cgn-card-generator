@@ -13,8 +13,6 @@ app.post('/gerar-card', async (req, res) => {
   }
 
   const API_KEY = process.env.GEMINI_API_KEY; 
-  const INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
-  const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
 
   let browser = null;
   try {
@@ -76,35 +74,7 @@ app.post('/gerar-card', async (req, res) => {
     const imageBuffer = await page.screenshot({ type: 'png' });
     await browser.close();
 
-    // Como a API do Instagram exige uma URL pública direta da imagem gerada,
-    // vamos usar um serviço super estável e nativo para converter o buffer em URL pública caso necessário, 
-    // ou podemos enviar a imagem direto se a API permitir. Como alternativa infalível, 
-    // vamos usar o serviço da ImgBB via API gratuita em segundo plano:
-    const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-    const FormData = require('form-data');
-    
-    // Convertendo o buffer para base64 para enviar via API do ImgBB (exemplo estável)
-    const base64Image = imageBuffer.toString('base64');
-    const formData = new URLSearchParams();
-    formData.append('key', '6d207e02928a393c524f0c4f421f57fa'); // Chave pública de exemplo ou use seu endpoint
-    formData.append('image', base64Image);
-
-    // Se preferir uma rota ainda mais direta sem depender de chave de imgbb, 
-    // podemos usar um truque: gerar o card e retornar o binário direto para o Apps Script salvar e gerar o link.
-    // Mas para manter no Render: vamos usar a API do ImgBB gratuita para hospedar o card por 1 minuto só para o Instagram puxar:
-    const uploadRes = await fetch('https://api.imgbb.com/1/upload?key=8d4834458d9bb08493f0b2f90a61d1ea', {
-      method: 'POST',
-      body: formData
-    });
-    const uploadData = await uploadRes.json();
-
-    if (!uploadData.success) {
-      return res.status(500).json({ error: 'Erro ao gerar link público do card no imgbb' });
-    }
-
-    let urlPublicaCard = uploadData.data.url;
-
-    // Gerar legenda com o Gemini
+    // Gerar legenda com o Gemini diretamente no Render
     let textoLimpo = textoMateria ? textoMateria.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim() : '';
     const prompt = `Escreva uma legenda em Português do Brasil com base na matéria abaixo.
 DIRETRIZES RIGOROSAS:
@@ -123,6 +93,7 @@ Matéria:
 ${titulo}
 ${textoLimpo.substring(0, 1000)}`;
 
+    const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
     const resGemini = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -139,23 +110,12 @@ ${textoLimpo.substring(0, 1000)}`;
 
     if (!legendaFinal) legendaFinal = `${titulo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\n#CentralGoiano #Noticias #Goias`;
 
-    // Postar no Instagram
-    const resContainer = await fetch(`https://graph.facebook.com/v19.0/${INSTAGRAM_ACCOUNT_ID}/media`, {
-      method: 'POST',
-      body: new URLSearchParams({ 'image_url': urlPublicaCard, 'caption': legendaFinal, 'access_token': INSTAGRAM_ACCESS_TOKEN })
+    // Retorna a imagem em binário (base64) e a legenda pronta num JSON limpo para o Google Apps Script publicar
+    res.json({
+      sucesso: true,
+      imagemBase64: imageBuffer.toString('base64'),
+      legenda: legendaFinal
     });
-    let dataContainer = await resContainer.json();
-
-    if (dataContainer.id) {
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      await fetch(`https://graph.facebook.com/v19.0/${INSTAGRAM_ACCOUNT_ID}/media_publish`, {
-        method: 'POST',
-        body: new URLSearchParams({ 'creation_id': dataContainer.id, 'access_token': INSTAGRAM_ACCESS_TOKEN })
-      });
-      return res.json({ sucesso: true, mensagem: 'Card gerado e publicado no Instagram com sucesso!' });
-    } else {
-      return res.status(500).json({ error: JSON.stringify(dataContainer) });
-    }
 
   } catch (err) {
     if (browser) await browser.close();
