@@ -13,14 +13,18 @@ app.post('/gerar-card', async (req, res) => {
 
   let browser = null;
   try {
+    // Lançamento otimizado para o ambiente do Render
     browser = await puppeteer.launch({
-      headless: 'new',
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--no-zygote',
+        '--single-process'
       ]
     });
 
