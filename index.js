@@ -8,7 +8,6 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-// Torna a pasta /tmp pública para que o Instagram consiga baixar a imagem gerada temporariamente
 app.use('/temp', express.static('/tmp'));
 
 app.post('/gerar-card', async (req, res) => {
@@ -19,8 +18,9 @@ app.post('/gerar-card', async (req, res) => {
   }
 
   const API_KEY = process.env.GEMINI_API_KEY; 
-  const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN; 
-  const IG_USER_ID = process.env.IG_USER_ID;           
+  // Alterado para corresponder exatamente aos nomes da sua imagem do Render:
+  const IG_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN; 
+  const IG_USER_ID = process.env.INSTAGRAM_ACCOUNT_ID;           
 
   let browser = null;
   try {
@@ -82,15 +82,12 @@ app.post('/gerar-card', async (req, res) => {
     const imageBuffer = await page.screenshot({ type: 'png' });
     await browser.close();
 
-    // Salva a imagem temporariamente no diretório /tmp do Render
     const fileName = `card-${Date.now()}.png`;
     const tempFilePath = path.join('/tmp', fileName);
     fs.writeFileSync(tempFilePath, imageBuffer);
 
-    // URL pública temporária para o Instagram baixar a imagem
     const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
 
-    // 1. Gerar legenda com o Gemini
     let textoLimpo = textoMateria ? textoMateria.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim() : '';
     const prompt = `Escreva uma legenda em Português do Brasil com base na matéria abaixo.
 DIRETRIZES RIGOROSAS:
@@ -125,11 +122,9 @@ ${textoLimpo.substring(0, 1000)}`;
 
     if (!legendaFinal) legendaFinal = `${titulo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\n#CentralGoiano #Noticias #Goias`;
 
-    // 2. Enviar para o Instagram (Instagram Graph API)
     let instagramStatus = "Sucesso";
     if (IG_ACCESS_TOKEN && IG_USER_ID) {
       try {
-        // Passo A: Criar o Container de Mídia no Instagram
         const mediaUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media`;
         const resMedia = await fetch(mediaUrl, {
           method: 'POST',
@@ -144,8 +139,6 @@ ${textoLimpo.substring(0, 1000)}`;
 
         if (dataMedia.id) {
           const creationId = dataMedia.id;
-
-          // Passo B: Publicar a Mídia Criada
           const publishUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media_publish`;
           const resPublish = await fetch(publishUrl, {
             method: 'POST',
