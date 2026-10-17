@@ -9,12 +9,13 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use('/temp', express.static('/tmp'));
 
-// Função universal de limpeza de lixo de RSS e HTML
+// Função para limpar lixos, HTML e remover marcas/nomes de fontes externas de forma definitiva
 function limparTextoLixo(str) {
   if (!str) return "";
   return str
     .replace(/<!\[CDATA\[/gi, '') .replace(/\]\]>/gi, '')
     .replace(/<[^>]*>?/gm, ' ')
+    .replace(/\s*[-|–—]\s*(G1|Jornal Opção|Diário de Goiás|Badiinho|Zap Catalão|Portal Catalão|Blog da Verdade|Diante do Fato|SD News|TV Sudeste|Metrópoles|Poder360|O Antagonista).*$/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -34,14 +35,11 @@ function extrairApenasLegenda(textoBruto) {
   return limpo.replace(/<\/?legenda>/gi, '').trim();
 }
 
-// ============================================================================
-// ROTA 1: GERADOR DE CARD VISUAL (APENAS IMAGEM PUPPETEER)
-// ============================================================================
 app.post('/gerar-card', async (req, res) => {
-  const { titulo, subtitulo, imagemUrl } = req.body;
+  const { titulo, subtitulo, imagemUrl, textoMateria } = req.body;
 
   if (!titulo) {
-    return res.status(400).json({ error: 'Título é obrigatório para o card' });
+    return res.status(400).json({ error: 'Título é obrigatório' });
   }
 
   const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
@@ -50,6 +48,10 @@ app.post('/gerar-card', async (req, res) => {
   if (subtituloLimpo.length > 150) {
     subtituloLimpo = subtituloLimpo.substring(0, 147) + "...";
   }
+
+  const API_KEY = process.env.GEMINI_API_KEY; 
+  const IG_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN; 
+  const IG_USER_ID = process.env.INSTAGRAM_ACCOUNT_ID;            
 
   let browser = null;
   try {
@@ -140,35 +142,16 @@ app.post('/gerar-card', async (req, res) => {
 
     const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
 
-    res.json({ sucesso: true, imageUrl: publicImageUrl });
-  } catch (err) {
-    if (browser) await browser.close();
-    console.error("Erro no Card:", err);
-    res.status(500).json({ error: err.toString() });
-  }
-});
+    // GERAÇÃO DA LEGENDA COM O GEMINI
+    let textoMateriaLimpo = limparTextoLixo(textoMateria || subtitulo || tituloLimpo);
+    const prompt = `Escreva uma legenda jornalística completa em Português do Brasil com base na matéria abaixo, mantendo um tamanho seguro, coeso e fluido (entre 1.000 e 1.400 caracteres), dividida em parágrafos bem estruturados.
 
-// ============================================================================
-// ROTA 2: GERADOR DE LEGENDA (APENAS GEMINI E TEXTO)
-// ============================================================================
-app.post('/gerar-legenda', async (req, res) => {
-  const { titulo, textoMateria } = req.body;
-
-  if (!titulo) {
-    return res.status(400).json({ error: 'Título é obrigatório para a legenda' });
-  }
-
-  const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
-  const textoMateriaLimpo = limparTextoLixo(textoMateria || tituloLimpo);
-  const API_KEY = process.env.GEMINI_API_KEY; 
-
-  const prompt = `Escreva uma legenda jornalística completa em Português do Brasil com base na matéria abaixo, mantendo um tamanho seguro, coeso e fluido (entre 1.000 e 1.400 caracteres), dividida em parágrafos bem estruturados.
-
-DIRETRIZES DE ESTILO E ESTRUTURA:
+DIRETRIZES DE ESTILO, ESTRUTURA E ANONIMATO:
 1. Tom estritamente jornalístico, formal, sóbrio e informativo.
-2. NÃO utilize emojis no corpo do texto.
-3. Garanta que o texto termine de forma completa, sem cortes secos ou frases inacabadas.
-4. ESTRUTURA DO RODAPÉ (OBRIGATÓRIA):
+2. NUNCA cite, mencione ou faça referência ao nome de onde a matéria foi originalmente extraída (fontes externas, outros sites, blogs ou agências). O texto pertence exclusivamente ao portal Central Goiano.
+3. NÃO utilize emojis no corpo do texto.
+4. Garanta que o texto termine de forma completa, sem cortes secos ou frases inacabadas.
+5. ESTRUTURA DO RODAPÉ (OBRIGATÓRIA):
 Após finalizar o texto principal, pule uma linha e insira exatamente os blocos abaixo:
 
 Para mais informações, acesse: www.centralgoiano.com.br
@@ -185,56 +168,110 @@ Matéria:
 Título: ${tituloLimpo}
 Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
 
-  let legendaFinal = "";
-  try {
-    let modeloUsado = 'gemini-1.5-flash';
+    let legendaFinal = "";
     try {
-      const resModels = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`);
-      if (resModels.ok) {
-        const dataModels = await resModels.json();
-        if (dataModels.models && Array.isArray(dataModels.models)) {
-          const modelosDisponiveis = dataModels.models
-            .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
-            .map(m => m.name.replace('models/', ''))
-            .sort((a, b) => b.localeCompare(a));
-          if (modelosDisponiveis.length > 0) {
-            modeloUsado = modelosDisponiveis[0];
+      let modeloUsado = 'gemini-1.5-flash';
+      try {
+        const resModels = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`);
+        if (resModels.ok) {
+          const dataModels = await resModels.json();
+          if (dataModels.models && Array.isArray(dataModels.models)) {
+            const modelosDisponiveis = dataModels.models
+              .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+              .map(m => m.name.replace('models/', ''))
+              .sort((a, b) => b.localeCompare(a));
+            if (modelosDisponiveis.length > 0) {
+              modeloUsado = modelosDisponiveis[0];
+            }
           }
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
 
-    const resGemini = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modeloUsado}:generateContent?key=${API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [{ 
-            text: "Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua escrita é formal, jornalística e sem emojis. Escreva textos coesos e completos, encerrando rigorosamente com a chamada do site, o canal de WhatsApp e as hashtags." 
-          }]
-        },
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { 
-          temperature: 0.1,
-          maxOutputTokens: 1024
+      const resGemini = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modeloUsado}:generateContent?key=${API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [{ 
+              text: "Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua escrita é formal, jornalística e sem emojis. É estritamente proibido citar nomes de outras fontes ou sites de origem. Escreva textos coesos e completos, encerrando rigorosamente com a chamada do site, o canal de WhatsApp e as hashtags." 
+            }]
+          },
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { 
+            temperature: 0.1,
+            maxOutputTokens: 1024
+          }
+        })
+      });
+
+      let dataGemini = await resGemini.json();
+      if (dataGemini.candidates && dataGemini.candidates[0] && dataGemini.candidates[0].content) {
+        let textoBruto = dataGemini.candidates[0].content.parts[0].text;
+        legendaFinal = extrairApenasLegenda(textoBruto);
+      }
+    } catch (errGemini) {
+      console.error("Erro no Gemini:", errGemini);
+    }
+
+    if (!legendaFinal || legendaFinal.length < 50) {
+      legendaFinal = `${tituloLimpo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goias`;
+    }
+
+    // POSTAGEM AUTOMÁTICA NO INSTAGRAM
+    let instagramStatus = "Sucesso";
+    if (IG_ACCESS_TOKEN && IG_USER_ID) {
+      try {
+        const mediaUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media`;
+        const resMedia = await fetch(mediaUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_url: publicImageUrl,
+            caption: legendaFinal,
+            access_token: IG_ACCESS_TOKEN
+          })
+        });
+        const dataMedia = await resMedia.json();
+
+        if (dataMedia.id) {
+          const creationId = dataMedia.id;
+          await new Promise(r => setTimeout(r, 4000));
+
+          const publishUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media_publish`;
+          const resPublish = await fetch(publishUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              creation_id: creationId,
+              access_token: IG_ACCESS_TOKEN
+            })
+          });
+          const dataPublish = await resPublish.json();
+          console.log("Postado no Instagram com ID:", dataPublish.id);
+        } else {
+          console.error("Erro no container Instagram:", dataMedia);
+          instagramStatus = "Erro container: " + JSON.stringify(dataMedia);
         }
-      })
+      } catch (igErr) {
+        console.error("Erro API Instagram:", igErr);
+        instagramStatus = "Erro IG: " + igErr.toString();
+      }
+    } else {
+      instagramStatus = "Tokens não encontrados";
+    }
+
+    res.json({
+      sucesso: true,
+      imageUrl: publicImageUrl,
+      instagram: instagramStatus,
+      legenda: legendaFinal
     });
 
-    let dataGemini = await resGemini.json();
-    if (dataGemini.candidates && dataGemini.candidates[0] && dataGemini.candidates[0].content) {
-      let textoBruto = dataGemini.candidates[0].content.parts[0].text;
-      legendaFinal = extrairApenasLegenda(textoBruto);
-    }
-  } catch (errGemini) {
-    console.error("Erro no Gemini:", errGemini);
+  } catch (err) {
+    if (browser) await browser.close();
+    console.error("Erro Geral:", err);
+    res.status(500).json({ error: err.toString() });
   }
-
-  if (!legendaFinal || legendaFinal.length < 50) {
-    legendaFinal = `${tituloLimpo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goias`;
-  }
-
-  res.json({ sucesso: true, legenda: legendaFinal });
 });
 
 const PORT = process.env.PORT || 10000;
