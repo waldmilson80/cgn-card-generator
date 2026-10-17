@@ -9,6 +9,9 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use('/temp', express.static('/tmp'));
 
+// Imagem de fundo padrão oficial do Central Goiano caso a matéria realmente não tenha imagem
+const IMAGEM_PADRAO_CGN = "https://blogger.googleusercontent.com/img/a/AVvXsEhoX4Y6mR_kK8j82XQ1eW9uA3i_zZ32qj9Lz7KkS8x0L2n8N_J1W3Z1M_J9Z8X7_K6X5Y4_J3Z2Y1";
+
 // Função para limpar lixos, HTML, menus de eleições e marcas externas
 function limparTextoLixo(str) {
   if (!str) return "";
@@ -64,11 +67,14 @@ app.post('/gerar-card', async (req, res) => {
 
   const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
   
+  // Garantia de Imagem de Fundo Válida
+  const imagemFinalCard = (imagemUrl && imagemUrl.startsWith("http")) ? imagemUrl : IMAGEM_PADRAO_CGN;
+
   // Tratamento do subtítulo para o card (curto e limpo)
   let subtituloBruto = subtitulo || textoMateria || "";
   let subtituloLimpo = formatarSubtituloInteligente(subtituloBruto, 130);
 
-  // Tratamento da matéria bruta integral para o Gemini (sem cortar em 130 caracteres)
+  // Tratamento da matéria bruta integral para o Gemini
   let textoCompletoMateria = limparTextoLixo(textoMateria || subtitulo || tituloLimpo);
 
   const API_KEY = process.env.GEMINI_API_KEY; 
@@ -127,7 +133,7 @@ app.post('/gerar-card', async (req, res) => {
     <body>
       <div id="cgn-card">
         <div class="cgn-final-bg-wrapper">
-          ${imagemUrl ? `<img src="${imagemUrl}" crossorigin="anonymous" />` : '<div style="width:100%;height:100%;background:#111;"></div>'}
+          <img id="bg-image" src="${imagemFinalCard}" crossorigin="anonymous" />
         </div>
         <div class="cgn-final-gradient-overlay"></div>
         <div class="cgn-final-logo-wrapper">
@@ -154,8 +160,20 @@ app.post('/gerar-card', async (req, res) => {
     </html>
     `;
 
-    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await new Promise(r => setTimeout(r, 1000));
+    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 25000 });
+
+    // AGUARDA A IMAGEM DE FUNDO CARREGAR 100%
+    try {
+      await page.waitForFunction(() => {
+        const img = document.getElementById('bg-image');
+        return img && img.complete && img.naturalWidth !== 0;
+      }, { timeout: 10000 });
+    } catch (imgErr) {
+      console.log("Aviso: Tempo limite de carregamento da imagem atingido, gerando com o estado atual.");
+    }
+
+    // Pausa técnica de 1.5s para renderização dos estilos e gradientes
+    await new Promise(r => setTimeout(r, 1500));
 
     const imageBuffer = await page.screenshot({ type: 'png' });
     await browser.close();
@@ -235,7 +253,6 @@ Conteúdo da Matéria: ${textoCompletoMateria.substring(0, 4000)}`;
       console.error("Erro no Gemini:", errGemini);
     }
 
-    // Se por qualquer motivo a legenda não for gerada com o tamanho mínimo, força uma estruturação informativa expandida
     if (!legendaFinal || legendaFinal.length < 200) {
       legendaFinal = `${tituloLimpo}\n\nUma nova descoberta traz desdobramentos importantes sobre este tema e chama a atenção de especialistas e do público. O assunto traz à tona discussões relevantes sobre os impactos e avanços nessa área, reforçando a importância do acompanhamento constante dos fatos.\n\nEspecialistas apontam que análises mais aprofundadas continuam sendo realizadas para compreender a dimensão completa dessas transformações e o que elas representam para o cenário atual.\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goias`;
     }
