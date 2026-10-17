@@ -9,15 +9,37 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use('/temp', express.static('/tmp'));
 
-// Função para limpar lixos, HTML e remover marcas/nomes de fontes externas de forma definitiva
+// Função para limpar lixos, HTML, menus de eleições e marcas externas
 function limparTextoLixo(str) {
   if (!str) return "";
-  return str
+  let limpo = str
     .replace(/<!\[CDATA\[/gi, '') .replace(/\]\]>/gi, '')
     .replace(/<[^>]*>?/gm, ' ')
+    // Remove lixos de apuração, widgets de eleições e menus de portais
+    .replace(/\b(Aparecida de Goiânia|Eleições APURAÇÃO \d+|Apuração ao Vivo|Candidatos por Goiás\d*|Apuração 2º turno\d*|Votação por ci[a-z]*|Veja o resultado|Confira a apuração)\b/gi, '')
     .replace(/\s*[-|–—]\s*(G1|Jornal Opção|Diário de Goiás|Badiinho|Zap Catalão|Portal Catalão|Blog da Verdade|Diante do Fato|SD News|TV Sudeste|Metrópoles|Poder360|O Antagonista).*$/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  return limpo;
+}
+
+// Corta o subtítulo de forma inteligente sem partir palavras no meio
+function formatarSubtituloInteligente(texto, limiteMax = 130) {
+  if (!texto) return "Acompanhe os detalhes e os desdobramentos desta notícia";
+  
+  let textoLimpo = limparTextoLixo(texto);
+  if (textoLimpo.length <= limiteMax) return textoLimpo;
+
+  // Corta no último espaço antes do limite para não partir nenhuma palavra
+  let subCorticulo = textoLimpo.substring(0, limiteMax);
+  let ultimoEspaco = subCorticulo.lastIndexOf(' ');
+  
+  if (ultimoEspaco > 40) {
+    subCorticulo = subCorticulo.substring(0, ultimoEspaco);
+  }
+  
+  return subCorticulo.trim() + "...";
 }
 
 // Extrai estritamente o conteúdo dentro da tag <legenda>
@@ -43,11 +65,10 @@ app.post('/gerar-card', async (req, res) => {
   }
 
   const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
-  let subtituloLimpo = limparTextoLixo(subtitulo || "");
   
-  if (subtituloLimpo.length > 150) {
-    subtituloLimpo = subtituloLimpo.substring(0, 147) + "...";
-  }
+  // Tratamento do subtítulo limpo e formatado por palavras inteiras
+  let subtituloBruto = subtitulo || textoMateria || "";
+  let subtituloLimpo = formatarSubtituloInteligente(subtituloBruto, 130);
 
   const API_KEY = process.env.GEMINI_API_KEY; 
   const IG_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN; 
@@ -142,16 +163,16 @@ app.post('/gerar-card', async (req, res) => {
 
     const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
 
-    // GERAÇÃO DA LEGENDA ALTAMENTE ELABORADA E ENVOLVENTE
-    let textoMateriaLimpo = limparTextoLixo(textoMateria || subtitulo || tituloLimpo);
-    const prompt = `Escreva uma legenda jornalística altamente elaborada, rica em detalhes e envolvente em Português do Brasil com base na matéria abaixo.
+    // GERAÇÃO DA LEGENDA EXPANDIDA E DETALHADA
+    let textoMateriaLimpo = limparTextoLixo(textoMateria || subtituloBruto || tituloLimpo);
+    const prompt = `Atue como um jornalista sênior e editor-chefe do portal Central Goiano. Com base no título e nas informações abaixo, escreva uma legenda de Instagram **longa, densa, altamente detalhada e aprofundada** (exigência mínima de 1.200 a 1.800 caracteres), estruturada em 5 a 7 parágrafos bem desenvolvidos.
 
-DIRETRIZES DE ESTILO, ESTRUTURA E ANONIMATO:
-1. Comece com um gancho forte e instigante (pode ser uma pergunta direta ao leitor ou uma introdução impactante sobre o tema, prendendo a atenção no mesmo estilo de grandes reportagens).
-2. Desenvolva o texto de forma rica e aprofundada em 4 a 6 parágrafos bem estruturados, detalhando os desdobramentos, o contexto e as informações essenciais com tom jornalístico profissional, sério e fluido.
-3. NUNCA cite, mencione ou faça referência ao nome de onde a matéria foi originalmente extraída (fontes externas, outros sites, blogs ou agências). O texto pertence exclusivamente ao portal Central Goiano.
-4. NÃO utilize emojis no corpo do texto.
-5. Garanta que o texto termine de forma completa, sem cortes secos ou frases inacabadas.
+DIRETRIZES RÍGIDAS DE ESTILO E CONTEÚDO:
+1. EXPANSÃO OBRIGATÓRIA: Mesmo que o resumo original seja curto, você deve expandir o contexto da notícia de forma inteligente, abordando a importância do tema, impactos na comunidade, histórico ou desdobramentos lógicos que tornem a leitura rica e completa para o público.
+2. Inicie com um parágrafo de impacto forte, contextualizando o assunto de forma instigante.
+3. Tom estritamente jornalístico, formal, sóbrio e informativo.
+4. ANONIMATO TOTAL: É estritamente proibido citar, mencionar ou fazer referência a qualquer site, blog, agência ou fonte de onde a matéria foi extraída. O texto é exclusivo do Central Goiano.
+5. ZERO EMOJIS no corpo do texto.
 6. ESTRUTURA DO RODAPÉ (OBRIGATÓRIA):
 Após finalizar o texto principal, pule uma linha e insira exatamente os blocos abaixo:
 
@@ -162,10 +183,9 @@ Tem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo Whats
 #[HashtagPrincipal1] #[HashtagPrincipal2]
 
 REGRA OBRIGATÓRIA DE SAÍDA:
-Coloque o texto final da legenda ESTRITAMENTE dentro das tags <legenda> e </legenda>.
-Não escreva análises, rascunhos ou textos fora dessas tags.
+Coloque o texto final da legenda ESTRITAMENTE dentro das tags <legenda> e </legenda>. Não escreva nada fora delas.
 
-Matéria:
+Matéria Base:
 Título: ${tituloLimpo}
 Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
 
@@ -194,13 +214,13 @@ Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
         body: JSON.stringify({
           system_instruction: {
             parts: [{ 
-              text: "Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua escrita é formal, jornalística, rica em detalhes, envolvente e sem emojis. É estritamente proibido citar nomes de outras fontes ou sites de origem. Escreva textos coesos, profundos e completos, encerrando rigorosamente com a chamada do site, o canal de WhatsApp e as hashtags." 
+              text: "Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua escrita é formal, jornalística, extremamente detalhada, analítica e sem emojis. Nunca deixe textos curtos; expanda o contexto de forma profissional. É proibido citar fontes externas. Encerre rigorosamente com a chamada do site, o WhatsApp e as hashtags." 
             }]
           },
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { 
-            temperature: 0.2,
-            maxOutputTokens: 1500
+            temperature: 0.3,
+            maxOutputTokens: 1800
           }
         })
       });
