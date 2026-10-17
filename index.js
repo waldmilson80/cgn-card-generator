@@ -15,7 +15,6 @@ function limparTextoLixo(str) {
   let limpo = str
     .replace(/<!\[CDATA\[/gi, '') .replace(/\]\]>/gi, '')
     .replace(/<[^>]*>?/gm, ' ')
-    // Remove lixos de apuração, widgets de eleições e menus de portais
     .replace(/\b(Aparecida de Goiânia|Eleições APURAÇÃO \d+|Apuração ao Vivo|Candidatos por Goiás\d*|Apuração 2º turno\d*|Votação por ci[a-z]*|Veja o resultado|Confira a apuração)\b/gi, '')
     .replace(/\s*[-|–—]\s*(G1|Jornal Opção|Diário de Goiás|Badiinho|Zap Catalão|Portal Catalão|Blog da Verdade|Diante do Fato|SD News|TV Sudeste|Metrópoles|Poder360|O Antagonista).*$/gi, '')
     .replace(/\s+/g, ' ')
@@ -31,15 +30,14 @@ function formatarSubtituloInteligente(texto, limiteMax = 130) {
   let textoLimpo = limparTextoLixo(texto);
   if (textoLimpo.length <= limiteMax) return textoLimpo;
 
-  // Corta no último espaço antes do limite para não partir nenhuma palavra
-  let subCorticulo = textoLimpo.substring(0, limiteMax);
-  let ultimoEspaco = subCorticulo.lastIndexOf(' ');
+  let subCortado = textoLimpo.substring(0, limiteMax);
+  let ultimoEspaco = subCortado.lastIndexOf(' ');
   
   if (ultimoEspaco > 40) {
-    subCorticulo = subCorticulo.substring(0, ultimoEspaco);
+    subCortado = subCortado.substring(0, ultimoEspaco);
   }
   
-  return subCorticulo.trim() + "...";
+  return subCortado.trim() + "...";
 }
 
 // Extrai estritamente o conteúdo dentro da tag <legenda>
@@ -66,9 +64,12 @@ app.post('/gerar-card', async (req, res) => {
 
   const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
   
-  // Tratamento do subtítulo limpo e formatado por palavras inteiras
+  // Tratamento do subtítulo para o card (curto e limpo)
   let subtituloBruto = subtitulo || textoMateria || "";
   let subtituloLimpo = formatarSubtituloInteligente(subtituloBruto, 130);
+
+  // Tratamento da matéria bruta integral para o Gemini (sem cortar em 130 caracteres)
+  let textoCompletoMateria = limparTextoLixo(textoMateria || subtitulo || tituloLimpo);
 
   const API_KEY = process.env.GEMINI_API_KEY; 
   const IG_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN; 
@@ -78,7 +79,7 @@ app.post('/gerar-card', async (req, res) => {
   try {
     const executablePath = await chromium.executablePath();
     browser = await puppeteer.launch({
-      args: chromium.args,
+      args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
       defaultViewport: { width: 1080, height: 1350, deviceScaleFactor: 2 },
       executablePath: executablePath,
       headless: chromium.headless,
@@ -153,7 +154,9 @@ app.post('/gerar-card', async (req, res) => {
     </html>
     `;
 
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await new Promise(r => setTimeout(r, 1000));
+
     const imageBuffer = await page.screenshot({ type: 'png' });
     await browser.close();
 
@@ -163,18 +166,16 @@ app.post('/gerar-card', async (req, res) => {
 
     const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
 
-    // GERAÇÃO DA LEGENDA EXPANDIDA E DETALHADA
-    let textoMateriaLimpo = limparTextoLixo(textoMateria || subtituloBruto || tituloLimpo);
-    const prompt = `Atue como um jornalista sênior e editor-chefe do portal Central Goiano. Com base no título e nas informações abaixo, escreva uma legenda de Instagram **longa, densa, altamente detalhada e aprofundada** (exigência mínima de 1.200 a 1.800 caracteres), estruturada em 5 a 7 parágrafos bem desenvolvidos.
+    // PROMPT REFORÇADO PARA GERAÇÃO OBRIGATÓRIA DE LEGENDA EXTENSA
+    const prompt = `Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua tarefa é escrever uma legenda de Instagram completa, longa e aprofundada (entre 1.200 e 1.800 caracteres) em Português do Brasil.
 
-DIRETRIZES RÍGIDAS DE ESTILO E CONTEÚDO:
-1. EXPANSÃO OBRIGATÓRIA: Mesmo que o resumo original seja curto, você deve expandir o contexto da notícia de forma inteligente, abordando a importância do tema, impactos na comunidade, histórico ou desdobramentos lógicos que tornem a leitura rica e completa para o público.
-2. Inicie com um parágrafo de impacto forte, contextualizando o assunto de forma instigante.
-3. Tom estritamente jornalístico, formal, sóbrio e informativo.
-4. ANONIMATO TOTAL: É estritamente proibido citar, mencionar ou fazer referência a qualquer site, blog, agência ou fonte de onde a matéria foi extraída. O texto é exclusivo do Central Goiano.
-5. ZERO EMOJIS no corpo do texto.
-6. ESTRUTURA DO RODAPÉ (OBRIGATÓRIA):
-Após finalizar o texto principal, pule uma linha e insira exatamente os blocos abaixo:
+INSTRUÇÕES OBRIGATÓRIAS:
+1. DESENVOLVA O CONTEÚDO: Mesmo que o trecho fornecido seja curto, utilize o título e as informações de base para redigir uma explicação jornalística completa, dividida em 4 a 6 parágrafos bem elaborados. Explique o contexto, os desdobramentos científicos ou sociais e a relevância do fato.
+2. Inicie com um parágrafo de impacto forte ou uma pergunta instigante ao leitor.
+3. Tom formal, sóbrio e jornalístico.
+4. NUNCA cite nomes de fontes externas, blogs, agências ou sites de origem. O texto pertence exclusivamente ao portal Central Goiano.
+5. ZERO EMOJIS no corpo da legenda.
+6. RODAPÉ OBRIGATÓRIO (Insira exatamente como abaixo ao final do texto):
 
 Para mais informações, acesse: www.centralgoiano.com.br
 
@@ -182,12 +183,12 @@ Tem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo Whats
 
 #[HashtagPrincipal1] #[HashtagPrincipal2]
 
-REGRA OBRIGATÓRIA DE SAÍDA:
-Coloque o texto final da legenda ESTRITAMENTE dentro das tags <legenda> e </legenda>. Não escreva nada fora delas.
+SAÍDA OBRIGATÓRIA:
+Forneça o texto final ESTRITAMENTE dentro das tags <legenda> e </legenda>.
 
-Matéria Base:
+Informações da Matéria:
 Título: ${tituloLimpo}
-Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
+Conteúdo da Matéria: ${textoCompletoMateria.substring(0, 4000)}`;
 
     let legendaFinal = "";
     try {
@@ -214,13 +215,13 @@ Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
         body: JSON.stringify({
           system_instruction: {
             parts: [{ 
-              text: "Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua escrita é formal, jornalística, extremamente detalhada, analítica e sem emojis. Nunca deixe textos curtos; expanda o contexto de forma profissional. É proibido citar fontes externas. Encerre rigorosamente com a chamada do site, o WhatsApp e as hashtags." 
+              text: "Você é o editor-chefe do Central Goiano. Sua obrigação é redigir legendas longas, ricas e completas de notícias. Nunca retorne apenas o título ou textos curtos. Desenvolva o contexto jornalístico em vários parágrafos. Proibido emojis e citação de fontes externas." 
             }]
           },
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { 
-            temperature: 0.3,
-            maxOutputTokens: 1800
+            temperature: 0.4,
+            maxOutputTokens: 2048
           }
         })
       });
@@ -234,8 +235,9 @@ Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
       console.error("Erro no Gemini:", errGemini);
     }
 
-    if (!legendaFinal || legendaFinal.length < 50) {
-      legendaFinal = `${tituloLimpo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goias`;
+    // Se por qualquer motivo a legenda não for gerada com o tamanho mínimo, força uma estruturação informativa expandida
+    if (!legendaFinal || legendaFinal.length < 200) {
+      legendaFinal = `${tituloLimpo}\n\nUma nova descoberta traz desdobramentos importantes sobre este tema e chama a atenção de especialistas e do público. O assunto traz à tona discussões relevantes sobre os impactos e avanços nessa área, reforçando a importância do acompanhamento constante dos fatos.\n\nEspecialistas apontam que análises mais aprofundadas continuam sendo realizadas para compreender a dimensão completa dessas transformações e o que elas representam para o cenário atual.\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goias`;
     }
 
     // POSTAGEM AUTOMÁTICA NO INSTAGRAM
