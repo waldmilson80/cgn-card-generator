@@ -66,7 +66,7 @@ app.post('/gerar-card', async (req, res) => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1080, height: 1350, deviceScaleFactor: 2 });
 
-    // HTML E CSS IDÊNTICO AO SEU TEMPLATE OFICIAL DO BLOG
+    // HTML E CSS IDÊNTICO AO SEU TEMPLATE OFICIAL DO BLOG (INTACTO)
     const htmlContent = `
     <!DOCTYPE html>
     <html lang="pt-BR">
@@ -257,22 +257,23 @@ app.post('/gerar-card', async (req, res) => {
 
     const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
 
-    // GERAÇÃO DA LEGENDA USANDO EXATAMENTE O PROMPT DO SEU BOTÃO ORIGINAL
+    // GERAÇÃO DA LEGENDA CALIBRADA COM BASE NO PADRÃO DETALHADO
     let textoMateriaLimpo = limparTextoLixo(textoMateria || subtitulo || tituloLimpo);
 
-    const prompt = `Escreva uma legenda em Português do Brasil com base na matéria abaixo.
+    const prompt = `Escreva uma legenda jornalística completa e bem detalhada em Português do Brasil com base na matéria abaixo, seguindo rigorosamente o padrão profissional do Central Goiano.
 
 DIRETRIZES DE ESTILO E ESTRUTURA:
-1. Tom estritamente jornalístico, formal, sóbrio e informativo.
-2. NÃO utilize emojis (ou utilize no máximo 1 caso seja extremamente estritamente necessário).
-3. Escreva o texto bem organizado em parágrafos.
-4. Ao finalizar o texto, insira o link do site.
-5. DEPOIS DO LINK DO SITE, DÊ OBRIGATORIAMENTE UMA LINHA EM BRANCO (UM ESPAÇO DUPLO) ANTES DE INSERIR AS HASHTAGS.
+1. TAMANHO DO TEXTO: Crie uma legenda bem desenvolvida, mantendo a extensão entre 1.500 e 2.100 caracteres (dividida em 5 a 8 parágrafos bem estruturados), sem ultrapassar o limite de 2.200 caracteres do Instagram.
+2. TOM DE VOZ: Tom estritamente jornalístico, formal, sóbrio e informativo.
+3. SEM EMOJIS: Não utilize emojis no corpo do texto.
+4. ESTRUTURA DO RODAPÉ (OBRIGATÓRIA):
+Ao finalizar a matéria, insira exatamente os blocos abaixo, pulando uma linha:
 
-ESTRUTURA OBRIGATÓRIA DO RODAPÉ:
 Para mais informações, acesse: www.centralgoiano.com.br
 
-#CentralGoiano [hashtag da cidade/pessoa] [hashtags relevantes]
+Tem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.
+
+#[HashtagPrincipal1] #[HashtagPrincipal2]
 
 REGRA OBRIGATÓRIA DE SAÍDA:
 Coloque o texto final da legenda ESTRITAMENTE dentro das tags <legenda> e </legenda>.
@@ -280,11 +281,10 @@ Não escreva análises, rascunhos ou textos fora dessas tags.
 
 Matéria:
 Título: ${tituloLimpo}
-Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
+Conteúdo: ${textoMateriaLimpo.substring(0, 4000)}`;
 
     let legendaFinal = "";
     try {
-      // Tenta listar modelos dinamicamente como no script original
       let modeloUsado = 'gemini-1.5-flash';
       try {
         const resModels = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`);
@@ -308,7 +308,7 @@ Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
         body: JSON.stringify({
           system_instruction: {
             parts: [{ 
-              text: "Você é um jornalista e editor do portal Central Goiano. Sua escrita é estritamente jornalística, profissional e sem emojis. Sua única saída deve ser a legenda contida entre <legenda> e </legenda>." 
+              text: "Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua escrita é estritamente jornalística, profissional, sem emojis e com textos longos e detalhados (1.500 a 2.100 caracteres). Sua única saída deve ser a legenda contida estritamente entre <legenda> e </legenda>." 
             }]
           },
           contents: [{ parts: [{ text: prompt }] }],
@@ -326,7 +326,7 @@ Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
     }
 
     if (!legendaFinal || legendaFinal.length < 50) {
-      legendaFinal = `${tituloLimpo}\n\n${subtituloLimpo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\n#CentralGoiano #Noticias #Goias`;
+      legendaFinal = `${tituloLimpo}\n\n${subtituloLimpo}\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goias`;
     }
 
     let instagramStatus = "Sucesso";
