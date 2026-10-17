@@ -9,9 +9,6 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use('/temp', express.static('/tmp'));
 
-// Imagem de fundo padrão oficial do Central Goiano caso a matéria realmente não tenha imagem
-const IMAGEM_PADRAO_CGN = "https://blogger.googleusercontent.com/img/a/AVvXsEhoX4Y6mR_kK8j82XQ1eW9uA3i_zZ32qj9Lz7KkS8x0L2n8N_J1W3Z1M_J9Z8X7_K6X5Y4_J3Z2Y1";
-
 // Função para limpar lixos, HTML, menus de eleições e marcas externas
 function limparTextoLixo(str) {
   if (!str) return "";
@@ -65,16 +62,24 @@ app.post('/gerar-card', async (req, res) => {
     return res.status(400).json({ error: 'Título é obrigatório' });
   }
 
-  const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
-  
-  // Garantia de Imagem de Fundo Válida
-  const imagemFinalCard = (imagemUrl && imagemUrl.startsWith("http")) ? imagemUrl : IMAGEM_PADRAO_CGN;
+  // 🚫 PROTEÇÃO: Se a matéria veio sem imagem válida, aborta o card e NÃO posta no Instagram
+  if (!imagemUrl || typeof imagemUrl !== 'string' || !imagemUrl.startsWith("http")) {
+    console.log("⚠️ Matéria sem imagem válida detectada. Postagem no Instagram cancelada para: " + titulo);
+    return res.json({
+      sucesso: false,
+      instagram: "Ignorado - Matéria sem imagem",
+      mensagem: "Nenhuma imagem válida encontrada. Postagem no Instagram abortada com sucesso."
+    });
+  }
 
-  // Tratamento do subtítulo para o card (curto e limpo)
+  const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
+  const imagemFinalCard = imagemUrl;
+
+  // Tratamento do subtítulo para o card
   let subtituloBruto = subtitulo || textoMateria || "";
   let subtituloLimpo = formatarSubtituloInteligente(subtituloBruto, 130);
 
-  // Tratamento da matéria bruta integral para o Gemini
+  // Tratamento da matéria integral para o Gemini
   let textoCompletoMateria = limparTextoLixo(textoMateria || subtitulo || tituloLimpo);
 
   const API_KEY = process.env.GEMINI_API_KEY; 
@@ -162,18 +167,16 @@ app.post('/gerar-card', async (req, res) => {
 
     await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 25000 });
 
-    // AGUARDA A IMAGEM DE FUNDO CARREGAR 100%
     try {
       await page.waitForFunction(() => {
         const img = document.getElementById('bg-image');
         return img && img.complete && img.naturalWidth !== 0;
-      }, { timeout: 10000 });
+      }, { timeout: 8000 });
     } catch (imgErr) {
-      console.log("Aviso: Tempo limite de carregamento da imagem atingido, gerando com o estado atual.");
+      console.log("Aviso: Imagem demorou a carregar, prosseguindo.");
     }
 
-    // Pausa técnica de 1.5s para renderização dos estilos e gradientes
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 1000));
 
     const imageBuffer = await page.screenshot({ type: 'png' });
     await browser.close();
@@ -184,7 +187,7 @@ app.post('/gerar-card', async (req, res) => {
 
     const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
 
-    // PROMPT REFORÇADO PARA GERAÇÃO OBRIGATÓRIA DE LEGENDA EXTENSA
+    // GERAÇÃO DA LEGENDA
     const prompt = `Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua tarefa é escrever uma legenda de Instagram completa, longa e aprofundada (entre 1.200 e 1.800 caracteres) em Português do Brasil.
 
 INSTRUÇÕES OBRIGATÓRIAS:
@@ -257,7 +260,7 @@ Conteúdo da Matéria: ${textoCompletoMateria.substring(0, 4000)}`;
       legendaFinal = `${tituloLimpo}\n\nUma nova descoberta traz desdobramentos importantes sobre este tema e chama a atenção de especialistas e do público. O assunto traz à tona discussões relevantes sobre os impactos e avanços nessa área, reforçando a importância do acompanhamento constante dos fatos.\n\nEspecialistas apontam que análises mais aprofundadas continuam sendo realizadas para compreender a dimensão completa dessas transformações e o que elas representam para o cenário atual.\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goias`;
     }
 
-    // POSTAGEM AUTOMÁTICA NO INSTAGRAM
+    // POSTAGEM NO INSTAGRAM
     let instagramStatus = "Sucesso";
     if (IG_ACCESS_TOKEN && IG_USER_ID) {
       try {
