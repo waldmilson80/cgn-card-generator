@@ -142,16 +142,17 @@ app.post('/gerar-card', async (req, res) => {
 
     const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
 
-    // GERAÇÃO DA LEGENDA COM O GEMINI
+    // GERAÇÃO DA LEGENDA ALTAMENTE ELABORADA E ENVOLVENTE
     let textoMateriaLimpo = limparTextoLixo(textoMateria || subtitulo || tituloLimpo);
-    const prompt = `Escreva uma legenda jornalística completa em Português do Brasil com base na matéria abaixo, mantendo um tamanho seguro, coeso e fluido (entre 1.000 e 1.400 caracteres), dividida em parágrafos bem estruturados.
+    const prompt = `Escreva uma legenda jornalística altamente elaborada, rica em detalhes e envolvente em Português do Brasil com base na matéria abaixo.
 
 DIRETRIZES DE ESTILO, ESTRUTURA E ANONIMATO:
-1. Tom estritamente jornalístico, formal, sóbrio e informativo.
-2. NUNCA cite, mencione ou faça referência ao nome de onde a matéria foi originalmente extraída (fontes externas, outros sites, blogs ou agências). O texto pertence exclusivamente ao portal Central Goiano.
-3. NÃO utilize emojis no corpo do texto.
-4. Garanta que o texto termine de forma completa, sem cortes secos ou frases inacabadas.
-5. ESTRUTURA DO RODAPÉ (OBRIGATÓRIA):
+1. Comece com um gancho forte e instigante (pode ser uma pergunta direta ao leitor ou uma introdução impactante sobre o tema, prendendo a atenção no mesmo estilo de grandes reportagens).
+2. Desenvolva o texto de forma rica e aprofundada em 4 a 6 parágrafos bem estruturados, detalhando os desdobramentos, o contexto e as informações essenciais com tom jornalístico profissional, sério e fluido.
+3. NUNCA cite, mencione ou faça referência ao nome de onde a matéria foi originalmente extraída (fontes externas, outros sites, blogs ou agências). O texto pertence exclusivamente ao portal Central Goiano.
+4. NÃO utilize emojis no corpo do texto.
+5. Garanta que o texto termine de forma completa, sem cortes secos ou frases inacabadas.
+6. ESTRUTURA DO RODAPÉ (OBRIGATÓRIA):
 Após finalizar o texto principal, pule uma linha e insira exatamente os blocos abaixo:
 
 Para mais informações, acesse: www.centralgoiano.com.br
@@ -193,13 +194,13 @@ Conteúdo: ${textoMateriaLimpo.substring(0, 3500)}`;
         body: JSON.stringify({
           system_instruction: {
             parts: [{ 
-              text: "Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua escrita é formal, jornalística e sem emojis. É estritamente proibido citar nomes de outras fontes ou sites de origem. Escreva textos coesos e completos, encerrando rigorosamente com a chamada do site, o canal de WhatsApp e as hashtags." 
+              text: "Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua escrita é formal, jornalística, rica em detalhes, envolvente e sem emojis. É estritamente proibido citar nomes de outras fontes ou sites de origem. Escreva textos coesos, profundos e completos, encerrando rigorosamente com a chamada do site, o canal de WhatsApp e as hashtags." 
             }]
           },
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { 
-            temperature: 0.1,
-            maxOutputTokens: 1024
+            temperature: 0.2,
+            maxOutputTokens: 1500
           }
         })
       });
