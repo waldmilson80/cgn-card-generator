@@ -1,70 +1,82 @@
-const express = require('express');
-const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
-const fs = require('fs');
-const path = require('path');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-
-const app = express();
-app.use(express.json({ limit: '10mb' }));
-app.use('/temp', express.static('/tmp'));
-
-// Função para limpar lixos, HTML, menus de eleições e marcas externas
-function limparTextoLixo(str) {
-  if (!str) return "";
-  let limpo = str
-    .replace(/<!\[CDATA\[/gi, '') .replace(/\]\]>/gi, '')
-    .replace(/<[^>]*>?/gm, ' ')
-    .replace(/\b(Aparecida de Goiânia|Eleições APURAÇÃO \d+|Apuração ao Vivo|Candidatos por Goiás\d*|Apuração 2º turno\d*|Votação por ci[a-z]*|Veja o resultado|Confira a apuração)\b/gi, '')
-    .replace(/\s*[-|–—]\s*(G1|Jornal Opção|Diário de Goiás|Badiinho|Zap Catalão|Portal Catalão|Blog da Verdade|Diante do Fato|SD News|TV Sudeste|Metrópoles|Poder360|O Antagonista).*$/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  return limpo;
-}
-
-// Corta o subtítulo de forma inteligente sem partir palavras no meio
-function formatarSubtituloInteligente(texto, limiteMax = 130) {
-  if (!texto) return "Acompanhe os detalhes e os desdobramentos desta notícia";
-  
-  let textoLimpo = limparTextoLixo(texto);
-  if (textoLimpo.length <= limiteMax) return textoLimpo;
-
-  let subCortado = textoLimpo.substring(0, limiteMax);
-  let ultimoEspaco = subCortado.lastIndexOf(' ');
-  
-  if (ultimoEspaco > 40) {
-    subCortado = subCortado.substring(0, ultimoEspaco);
-  }
-  
-  return subCortado.trim() + "...";
-}
-
-// Extrai estritamente o conteúdo dentro da tag <legenda> (com fallback tolerante)
-function extrairApenasLegenda(textoBruto) {
+// Sanitização estricta da legenda
+function sanitizarLegendaFinal(textoBruto) {
   if (!textoBruto) return "";
-  const match = textoBruto.match(/<legenda>([\s\S]*?)<\/legenda>/i);
-  if (match && match[1].trim()) {
-    return match[1].trim();
-  }
   
-  let limpo = textoBruto;
-  if (limpo.includes('Final Version:')) {
-    limpo = limpo.split('Final Version:').pop();
-  } else if (limpo.includes('*Final Version:*')) {
-    limpo = limpo.split('*Final Version:*').pop();
+  let limpo = textoBruto.replace(/<\/?legenda>/gi, '').trim();
+  limpo = limpo.replace(/\*\*/g, '').replace(/\*/g, '');
+
+  if (!limpo.includes("www.centralgoiano.com.br")) {
+    limpo += `\n\nPara mais informações, acesse:\nwww.centralgoiano.com.br\n\n#CentralGoiano #Noticias #Goiás`;
+  } else {
+    if (!limpo.includes("#CentralGoiano")) {
+      limpo += `\n\n#CentralGoiano #Noticias #Goiás`;
+    }
   }
-  return limpo.replace(/<\/?legenda>/gi, '').trim();
+
+  return limpo.trim();
 }
 
-// Geração de Legenda com Gemini + Pesquisa na Web (Google Search Grounding)
-async function gerarLegendaGeminiComBusca(tituloLimpo, textoCompletoMateria, apiKeyGemini) {
-  if (!apiKeyGemini) {
-    console.error("⚠️ GEMINI_API_KEY não configurada nas variáveis de ambiente!");
+// 1️⃣ PRIMÁRIO: ChatGPT (OpenAI) - Fiel, profundo e sem invenção
+async function gerarLegendaChatGPT(tituloLimpo, textoCompletoMateria) {
+  const apiKeyOpenAI = process.env.OPENAI_API_KEY;
+  if (!apiKeyOpenAI) {
+    console.error("⚠️ OPENAI_API_KEY não configurada!");
     return "";
   }
 
-  // Descobre dinamicamente os modelos disponíveis
+  const prompt = `Você é o jornalista sênior e editor-chefe do portal Central Goiano. Escreva uma legenda de Instagram profissional, analítica e fluida baseada **EXCLUSIVAMENTE** nas informações da matéria abaixo.
+
+REGRAS ABSOLUTAS:
+1. FIDELIDADE TOTAL: Fale apenas sobre o que está no texto abaixo. Se o texto for curto, elabore e dê densidade à narrativa explorando os ângulos lógicos apresentados, mas **nunca invente** fatos, números, nomes ou acontecimentos externos.
+2. ESTRUTURA DE PARÁGRAFOS: Organize o conteúdo exatamente em 4 parágrafos bem distribuídos (Contexto inicial, desenvolvimento dos fatos, repercussão/detalhes e fechamento analítico).
+3. TOM: Estritamente jornalístico, formal, sóbrio e sem emojis (Proibido absoluto).
+4. EXCLUSIVIDADE: Não cite fontes externas ou concorrentes.
+5. RODAPÉ OBRIGATÓRIO (Coloque exatamente com esta formatação ao final):
+
+Para mais informações, acesse:
+www.centralgoiano.com.br
+
+#CentralGoiano #Noticias #Goiás
+
+Título da Matéria: ${tituloLimpo}
+Texto Original da Matéria: ${textoCompletoMateria.substring(0, 4000)}`;
+
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKeyOpenAI}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "Você é o editor-chefe do Central Goiano. Escreva legendas jornalísticas estruturadas em 4 parágrafos, estritamente fiéis ao texto original, sem emojis e sem inventar dados." },
+          { role: "user", content: prompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 1500
+      })
+    });
+
+    const data = await res.json();
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+      let resultado = sanitizarLegendaFinal(data.choices[0].message.content);
+      if (resultado && resultado.length > 50) {
+        console.log("✅ Legenda gerada com sucesso via OpenAI (ChatGPT)!");
+        return resultado;
+      }
+    }
+  } catch (err) {
+    console.error("Erro na OpenAI:", err);
+  }
+  return "";
+}
+
+// 2️⃣ SECUNDÁRIO (BACKUP): Gemini - Caso a OpenAI falhe
+async function gerarLegendaGeminiBackup(tituloLimpo, textoCompletoMateria, apiKeyGemini) {
+  if (!apiKeyGemini) return "";
+
   let modelos = ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-pro'];
   try {
     const resModels = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKeyGemini}`);
@@ -78,273 +90,44 @@ async function gerarLegendaGeminiComBusca(tituloLimpo, textoCompletoMateria, api
         if (disponiveis.length > 0) modelos = disponiveis;
       }
     }
-  } catch (errModels) {
-    console.log("⚠️ Usando lista padrão de modelos Gemini.");
-  }
+  } catch (e) {}
 
-  const prompt = `Você é o jornalista sênior e editor-chefe do portal Central Goiano. Sua missão é fazer uma pesquisa na web sobre este assunto, aprofundar os fatos e escrever uma legenda de Instagram extremamente rica, detalhada, analítica e de alto nível jornalístico.
+  const prompt = `Você é o jornalista sênior e editor-chefe do portal Central Goiano. Escreva uma legenda de Instagram profissional, fluida e estruturada em 4 parágrafos, baseando-se **EXCLUSIVAMENTE** nas informações da matéria abaixo, sem inventar fatos externos.
 
-DIRETRIZES OBRIGATÓRIAS:
-1. PESQUISE NA WEB: Utilize a ferramenta de busca para encontrar o contexto real, dados históricos e desdobramentos recentes sobre o tema abaixo.
-2. ESTRUTURA: Escreva um texto longo, robusto e bem organizado em 4 a 5 parágrafos.
-3. TOM: Estritamente jornalístico, formal, sóbrio e informativo. NUNCA utilize emojis.
-4. EXCLUSIVIDADE: NUNCA cite nomes de fontes externas ou portais concorrentes (G1, Metrópoles, etc.). O conteúdo pertence exclusivamente ao Central Goiano.
-5. RODAPÉ OBRIGATÓRIO (Insira exatamente como abaixo ao final do texto):
+REGRAS:
+1. 4 parágrafos bem divididos.
+2. Sem emojis.
+3. Rodapé obrigatório:
 
-Para mais informações, acesse: www.centralgoiano.com.br
-
-Tem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.
+Para mais informações, acesse:
+www.centralgoiano.com.br
 
 #CentralGoiano #Noticias #Goiás
 
-REGRA OBRIGATÓRIA DE SAÍDA:
-Coloque o texto final da legenda ESTRITAMENTE dentro das tags <legenda> e </legenda>. Não escreva nada fora delas.
-
-Título da Matéria: ${tituloLimpo}
-Texto de Apoio: ${textoCompletoMateria.substring(0, 3000)}`;
+Título: ${tituloLimpo}
+Texto da Matéria: ${textoCompletoMateria.substring(0, 4000)}`;
 
   for (const modelo of modelos) {
     try {
-      const URL_API = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKeyGemini}`;
-      
-      const response = await fetch(URL_API, {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKeyGemini}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // Ativa a ferramenta de pesquisa na web do Google no Gemini
-          tools: [{ google_search: {} }],
-          system_instruction: {
-            parts: [{ 
-              text: "Você é o editor-chefe do portal Central Goiano. Pesquise na web e redija legendas jornalísticas profundas, exclusivas e sem emojis. Sua única saída deve ser a legenda contida entre <legenda> e </legenda>." 
-            }]
-          },
-          contents: [{
-            parts: [{ text: prompt }]
-          }],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 2048
-          }
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
         })
       });
 
-      const data = await response.json();
-
+      const data = await res.json();
       if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
         let textoBruto = data.candidates[0].content.parts[0].text;
-        let resultado = extrairApenasLegenda(textoBruto);
-        if (resultado && resultado.length > 100) {
-          console.log(`✅ Legenda robusta gerada com sucesso via Gemini (${modelo}) com pesquisa web!`);
+        let resultado = sanitizarLegendaFinal(textoBruto);
+        if (resultado && resultado.length > 50) {
+          console.log(`✅ Legenda gerada com sucesso via Gemini Backup (${modelo})!`);
           return resultado;
         }
       }
-    } catch (err) {
-      console.error(`Erro com o modelo ${modelo}:`, err.message);
-    }
+    } catch (err) {}
   }
-
   return "";
 }
-
-app.post('/gerar-card', async (req, res) => {
-  const { titulo, subtitulo, imagemUrl, textoMateria } = req.body;
-
-  if (!titulo) {
-    return res.status(400).json({ error: 'Título é obrigatório' });
-  }
-
-  // 🚫 PROTEÇÃO: Se a matéria veio sem imagem válida, aborta o card e NÃO posta no Instagram
-  if (!imagemUrl || typeof imagemUrl !== 'string' || !imagemUrl.startsWith("http")) {
-    console.log("⚠️ Matéria sem imagem válida detectada. Postagem no Instagram cancelada para: " + titulo);
-    return res.json({
-      sucesso: false,
-      instagram: "Ignorado - Matéria sem imagem",
-      mensagem: "Nenhuma imagem válida encontrada. Postagem no Instagram abortada com sucesso."
-    });
-  }
-
-  const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
-  const imagemFinalCard = imagemUrl;
-
-  // Tratamento do subtítulo para o card
-  let subtituloBruto = subtitulo || textoMateria || "";
-  let subtituloLimpo = formatarSubtituloInteligente(subtituloBruto, 130);
-
-  // Tratamento da matéria integral
-  let textoBaseMateria = limparTextoLixo(textoMateria || subtitulo || tituloLimpo);
-
-  const API_KEY_GEMINI = process.env.GEMINI_API_KEY; 
-  const IG_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN; 
-  const IG_USER_ID = process.env.INSTAGRAM_ACCOUNT_ID;            
-
-  let browser = null;
-  try {
-    const executablePath = await chromium.executablePath();
-    browser = await puppeteer.launch({
-      args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-      defaultViewport: { width: 1080, height: 1350, deviceScaleFactor: 2 },
-      executablePath: executablePath,
-      headless: chromium.headless,
-    });
-
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1080, height: 1350, deviceScaleFactor: 2 });
-
-    const htmlContent = `
-    <!DOCTYPE html>
-    <html lang="pt-BR">
-    <head>
-      <meta charset="UTF-8">
-      <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,700;0,800;0,900;1,700;1,800;1,900&display=swap" rel="stylesheet">
-      <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { 
-          width: 1080px; height: 1350px; background-color: #1a1a1a; 
-          font-family: 'Montserrat', Arial, sans-serif; overflow: hidden; position: relative;
-          -webkit-font-smoothing: antialiased;
-        }
-        #cgn-card { position: relative; width: 1080px; height: 1350px; background-color: #1a1a1a; overflow: hidden; }
-        .cgn-final-bg-wrapper { position: absolute; top: 0; left: 0; width: 1080px; height: 1350px; overflow: hidden; z-index: 1; background-color: #111111; }
-        .cgn-final-bg-wrapper img { width: 100%; height: 100%; object-fit: cover; display: block; }
-        .cgn-final-gradient-overlay {
-          position: absolute; top: 0; left: 0; width: 1080px; height: 1350px;
-          background: radial-gradient(circle at 12% 12%, rgba(0, 0, 0, 0.15) 0%, rgba(0, 0, 0, 0) 40%),
-                      linear-gradient(180deg, rgba(0, 0, 0, 0.1) 0%, rgba(0, 0, 0, 0) 15%, rgba(0, 0, 0, 0) 65%, rgba(0, 0, 0, 0.8) 83%, rgba(0, 0, 0, 0.95) 100%);
-          z-index: 2;
-        }
-        .cgn-final-logo-wrapper { position: absolute; top: 55px; left: 75px; z-index: 10; }
-        .cgn-final-logo-img { width: 230px; height: auto; display: block; filter: drop-shadow(0px 3px 6px rgba(0, 0, 0, 0.4)); }
-        .cgn-final-content-box { position: absolute; bottom: 0; left: 0; width: 1080px; padding: 0 75px 40px 75px; z-index: 5; display: flex; flex-direction: column; }
-        .cgn-final-title { font-size: 42px; font-weight: 900; color: #ffffff; line-height: 1.18; margin: 0 0 16px 0; letter-spacing: -0.2px; text-shadow: 0px 2px 8px rgba(0, 0, 0, 0.8); text-align: left; }
-        .cgn-final-subtitle { font-size: 26px; font-style: italic; font-weight: 800; color: #ffffff; line-height: 1.25; margin: 0 0 24px 0; letter-spacing: -0.2px; text-shadow: 0px 2px 8px rgba(0, 0, 0, 0.8); text-align: left; }
-        .cgn-final-subtitle-link { color: #e30613; font-style: italic; font-weight: 800; }
-        .cgn-final-social-row { display: flex; align-items: center; width: 100%; margin-bottom: 18px; }
-        .cgn-final-line { flex: 1; height: 2.5px; background-color: #e30613; }
-        .cgn-final-icons-group { display: flex; gap: 12px; padding: 0 16px; }
-        .cgn-final-icon-circle { width: 30px; height: 30px; border-radius: 50%; background-color: #ffffff; display: flex; align-items: center; justify-content: center; }
-        .cgn-final-icon-circle svg { fill: #000000; width: 16px; height: 16px; }
-        .cgn-final-domain { text-align: center; width: 100%; font-size: 27px; font-weight: 800; color: #ffffff; letter-spacing: 0.3px; }
-      </style>
-    </head>
-    <body>
-      <div id="cgn-card">
-        <div class="cgn-final-bg-wrapper">
-          <img id="bg-image" src="${imagemFinalCard}" crossorigin="anonymous" />
-        </div>
-        <div class="cgn-final-gradient-overlay"></div>
-        <div class="cgn-final-logo-wrapper">
-          <img class="cgn-final-logo-img" crossorigin="anonymous" src="https://blogger.googleusercontent.com/img/a/AVvXsEi4E2jKp6G8IUFdI5IlJdn0NQr1A_DlfyUe0r3RrlfS2AGJ73-6WGm65u81BwsXKg7bGVvGrysbpuTd6uiAppXhzWoPgCP89xanRbdSjUtttLCALl4PEzqbTrIxhe8c9tDwquZYMQj-pjK9ew7zRUF5qEaHoAIwgFW8Nn7mbhmuffn9JEbpqDtbqlugZIYy" />
-        </div>
-        <div class="cgn-final-content-box">
-          <h1 class="cgn-final-title">${tituloLimpo}</h1>
-          <div class="cgn-final-subtitle">
-            ${subtituloLimpo} <span class="cgn-final-subtitle-link">materia completa em: www.centralgoiano.com.br</span>
-          </div>
-          <div class="cgn-final-social-row">
-            <div class="cgn-final-line"></div>
-            <div class="cgn-final-icons-group">
-              <div class="cgn-final-icon-circle"><svg viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg></div>
-              <div class="cgn-final-icon-circle"><svg viewBox="0 0 24 24"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg></div>
-              <div class="cgn-final-icon-circle"><svg viewBox="0 0 24 24"><path d="M9 8H6v4h3v12h5V12h3.642L18 8h-4V6.333C14 5.374 14.5 5 15.5 5H18V0h-3.808C10.592 0 9 1.815 9 5.234V8z"/></svg></div>
-            </div>
-            <div class="cgn-final-line"></div>
-          </div>
-          <div class="cgn-final-domain">www.centralgoiano.com.br</div>
-        </div>
-      </div>
-    </body>
-    </html>
-    `;
-
-    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 25000 });
-
-    try {
-      await page.waitForFunction(() => {
-        const img = document.getElementById('bg-image');
-        return img && img.complete && img.naturalWidth !== 0;
-      }, { timeout: 8000 });
-    } catch (imgErr) {
-      console.log("Aviso: Imagem demorou a carregar, prosseguindo.");
-    }
-
-    await new Promise(r => setTimeout(r, 1000));
-
-    const imageBuffer = await page.screenshot({ type: 'png' });
-    await browser.close();
-
-    const fileName = `card-${Date.now()}.png`;
-    const tempFilePath = path.join('/tmp', fileName);
-    fs.writeFileSync(tempFilePath, imageBuffer);
-
-    const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
-
-    // GERAÇÃO DA LEGENDA COM PESQUISA NA WEB E PADRÃO INSTITUCIONAL
-    console.log("🔍 Acionando Gemini com Pesquisa na Web e Padrão Central Goiano...");
-    let legendaFinal = await gerarLegendaGeminiComBusca(tituloLimpo, textoBaseMateria, API_KEY_GEMINI);
-
-    // Fallback dinâmico seguro caso ocorra qualquer instabilidade na API do Google
-    if (!legendaFinal || legendaFinal.length < 50) {
-      legendaFinal = `${tituloLimpo}\n\nA cobertura completa sobre este assunto traz importantes desdobramentos para a região e exige atenção aos detalhes dos fatos abordados.\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goiás`;
-    }
-
-    // POSTAGEM NO INSTAGRAM
-    let instagramStatus = "Sucesso";
-    if (IG_ACCESS_TOKEN && IG_USER_ID) {
-      try {
-        const mediaUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media`;
-        const resMedia = await fetch(mediaUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            image_url: publicImageUrl,
-            caption: legendaFinal,
-            access_token: IG_ACCESS_TOKEN
-          })
-        });
-        const dataMedia = await resMedia.json();
-
-        if (dataMedia.id) {
-          const creationId = dataMedia.id;
-          await new Promise(r => setTimeout(r, 4000));
-
-          const publishUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media_publish`;
-          const resPublish = await fetch(publishUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              creation_id: creationId,
-              access_token: IG_ACCESS_TOKEN
-            })
-          });
-          const dataPublish = await resPublish.json();
-          console.log("Postado no Instagram com ID:", dataPublish.id);
-        } else {
-          console.error("Erro no container Instagram:", dataMedia);
-          instagramStatus = "Erro container: " + JSON.stringify(dataMedia);
-        }
-      } catch (igErr) {
-        console.error("Erro API Instagram:", igErr);
-        instagramStatus = "Erro IG: " + igErr.toString();
-      }
-    } else {
-      instagramStatus = "Tokens não encontrados";
-    }
-
-    res.json({
-      sucesso: true,
-      imageUrl: publicImageUrl,
-      instagram: instagramStatus,
-      legenda: legendaFinal
-    });
-
-  } catch (err) {
-    if (browser) await browser.close();
-    console.error("Erro Geral:", err);
-    res.status(500).json({ error: err.toString() });
-  }
-});
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
