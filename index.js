@@ -33,7 +33,6 @@ function formatarSubtituloInteligente(texto, limiteMax = 130) {
   return subCortado.trim() + "...";
 }
 
-// Extração exata pelas tags <legenda>
 function extrairApenasLegenda(textoBruto) {
   if (!textoBruto) return "";
   const match = textoBruto.match(/<legenda>([\s\S]*?)<\/legenda>/i);
@@ -44,7 +43,6 @@ function extrairApenasLegenda(textoBruto) {
   return limpo;
 }
 
-// GERADOR OFICIAL VIA GEMINI (Com parágrafos menores e rodapé completo do Central Goiano)
 async function gerarLegendaGeminiOficial(tituloLimpo, textoCompletoMateria, apiKeyGemini) {
   if (!apiKeyGemini) {
     console.error("⚠️ ERRO: GEMINI_API_KEY não configurada no Render!");
@@ -126,21 +124,9 @@ Conteúdo da Matéria: ${textoCompletoMateria.substring(0, 4000)}`;
   return "";
 }
 
-app.post('/gerar-card', async (req, res) => {
-  const { titulo, subtitulo, imagemUrl, textoMateria } = req.body;
-
-  if (!titulo) {
-    return res.status(400).json({ error: 'Título é obrigatório' });
-  }
-
-  if (!imagemUrl || typeof imagemUrl !== 'string' || !imagemUrl.startsWith("http")) {
-    console.log("⚠️ Matéria sem imagem válida. Abortada para: " + titulo);
-    return res.json({
-      sucesso: false,
-      instagram: "Ignorado - Matéria sem imagem",
-      mensagem: "Nenhuma imagem válida encontrada."
-    });
-  }
+// FUNÇÃO PESADA PROCESSADA EM SEGUNDO PLANO
+async function processarCardEInstagramEmSegundoPlano(reqBody, protocol, host) {
+  const { titulo, subtitulo, imagemUrl, textoMateria } = reqBody;
 
   const tituloLimpo = limparTextoLixo(titulo).replace(/^["“'«]|["”'»]$/g, '');
   const imagemFinalCard = imagemUrl;
@@ -154,6 +140,7 @@ app.post('/gerar-card', async (req, res) => {
 
   let browser = null;
   try {
+    console.log(`🚀 Iniciando processamento em segundo plano para: "${tituloLimpo}"`);
     const executablePath = await chromium.executablePath();
     browser = await puppeteer.launch({
       args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
@@ -232,7 +219,7 @@ app.post('/gerar-card', async (req, res) => {
     const fileName = `card-${Date.now()}.png`;
     const tempFilePath = path.join('/tmp', fileName);
     fs.writeFileSync(tempFilePath, imageBuffer);
-    const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
+    const publicImageUrl = `${protocol}://${host}/temp/${fileName}`;
 
     console.log("🤖 Gerando legenda com Gemini Oficial...");
     let legendaFinal = await gerarLegendaGeminiOficial(tituloLimpo, textoBaseMateria, API_KEY_GEMINI);
@@ -241,54 +228,60 @@ app.post('/gerar-card', async (req, res) => {
       legendaFinal = `${tituloLimpo}\n\n${textoBaseMateria.substring(0, 300)}...\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias`;
     }
 
-    let instagramStatus = "Sucesso";
     if (IG_ACCESS_TOKEN && IG_USER_ID) {
-      try {
-        const mediaUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media`;
-        const resMedia = await fetch(mediaUrl, {
+      const mediaUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media`;
+      const resMedia = await fetch(mediaUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_url: publicImageUrl,
+          caption: legendaFinal,
+          access_token: IG_ACCESS_TOKEN
+        })
+      });
+      const dataMedia = await resMedia.json();
+
+      if (dataMedia.id) {
+        const creationId = dataMedia.id;
+        await new Promise(r => setTimeout(r, 4000));
+
+        const publishUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media_publish`;
+        await fetch(publishUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            image_url: publicImageUrl,
-            caption: legendaFinal,
-            access_token: IG_ACCESS_TOKEN
-          })
+          body: JSON.stringify({ creation_id: creationId, access_token: IG_ACCESS_TOKEN })
         });
-        const dataMedia = await resMedia.json();
-
-        if (dataMedia.id) {
-          const creationId = dataMedia.id;
-          await new Promise(r => setTimeout(r, 4000));
-
-          const publishUrl = `https://graph.facebook.com/v18.0/${IG_USER_ID}/media_publish`;
-          const resPublish = await fetch(publishUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.svg ? JSON.stringify({ creation_id: creationId, access_token: IG_ACCESS_TOKEN }) : JSON.stringify({ creation_id: creationId, access_token: IG_ACCESS_TOKEN })
-          });
-          await resPublish.json();
-        } else {
-          instagramStatus = "Erro container: " + JSON.stringify(dataMedia);
-        }
-      } catch (igErr) {
-        instagramStatus = "Erro IG: " + igErr.toString();
+        console.log("🎉 Publicado com Sucesso no Instagram!");
       }
-    } else {
-      instagramStatus = "Tokens não encontrados";
     }
-
-    res.json({
-      sucesso: true,
-      imageUrl: publicImageUrl,
-      instagram: instagramStatus,
-      legenda: legendaFinal
-    });
-
   } catch (err) {
     if (browser) await browser.close();
-    console.error("Erro Geral:", err);
-    res.status(500).json({ error: err.toString() });
+    console.error("❌ Erro no processamento em segundo plano:", err);
   }
+}
+
+app.post('/gerar-card', (req, res) => {
+  const { titulo, imagemUrl } = req.body;
+
+  if (!titulo) {
+    return res.status(400).json({ error: 'Título é obrigatório' });
+  }
+
+  if (!imagemUrl || typeof imagemUrl !== 'string' || !imagemUrl.startsWith("http")) {
+    return res.json({
+      sucesso: false,
+      mensagem: "Nenhuma imagem válida encontrada."
+    });
+  }
+
+  // Responde IMEDIATAMENTE ao Apps Script em milissegundos
+  res.json({
+    sucesso: true,
+    mensagem: "Processamento do Card e Instagram iniciado em segundo plano."
+  });
+
+  // Executa todo o processo pesado sem prender o Apps Script
+  processarCardEInstagramEmSegundoPlano(req.body, req.protocol, req.get('host'));
 });
 
 const PORT = process.env.PORT || 10000;
