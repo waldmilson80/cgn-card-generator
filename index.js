@@ -40,13 +40,14 @@ function formatarSubtituloInteligente(texto, limiteMax = 130) {
   return subCortado.trim() + "...";
 }
 
-// Extrai estritamente o conteúdo dentro da tag <legenda>
+// Extrai estritamente o conteúdo dentro da tag <legenda> (com fallback tolerante)
 function extrairApenasLegenda(textoBruto) {
   if (!textoBruto) return "";
   const match = textoBruto.match(/<legenda>([\s\S]*?)<\/legenda>/i);
   if (match && match[1].trim()) {
     return match[1].trim();
   }
+  
   let limpo = textoBruto;
   if (limpo.includes('Final Version:')) {
     limpo = limpo.split('Final Version:').pop();
@@ -56,107 +57,92 @@ function extrairApenasLegenda(textoBruto) {
   return limpo.replace(/<\/?legenda>/gi, '').trim();
 }
 
-// 1️⃣ PRIMÁRIO: Função para Gerar Legenda com ChatGPT (OpenAI)
-async function gerarLegendaChatGPT(tituloLimpo, textoCompletoMateria) {
-  const apiKeyOpenAI = process.env.OPENAI_API_KEY;
-  
-  if (!apiKeyOpenAI) {
-    console.error("⚠️ OPENAI_API_KEY não configurada nas variáveis de ambiente!");
-    return "";
-  }
-  
-  const promptOpenAI = `Você é um jornalista sênior e editor-chefe do portal Central Goiano. Sua tarefa é escrever uma legenda de Instagram completa, longa, aprofundada, rica e analítica (OBRIGATORIAMENTE entre 1.200 e 1.800 caracteres) em Português do Brasil.
-
-INSTRUÇÕES OBRIGATÓRIAS DE CONTEÚDO:
-1. DESENVOLVA O CONTEÚDO DA MATÉRIA: Explique com riqueza de detalhes o contexto do fato, os envolvidos, os desdobramentos sociais/culturais e a relevância do tema. Nunca utilize textos genéricos.
-2. Inicie com um parágrafo de impacto forte ou uma pergunta instigante diretamente ligada ao título.
-3. Estruture o texto em 4 a 5 parágrafos bem elaborados e fluídos.
-4. Tom formal, sóbrio, respeitoso e estritamente jornalístico.
-5. NUNCA cite nomes de fontes externas, blogs ou agências concorrentes (G1, Metrópoles, UOL, etc.). O texto pertence exclusivamente ao portal Central Goiano.
-6. ZERO EMOJIS no corpo do texto.
-7. RODAPÉ OBRIGATÓRIO (Insira exatamente como abaixo ao final do texto):
-
-Para mais informações, acesse: www.centralgoiano.com.br
-
-Tem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.
-
-SAÍDA OBRIGATÓRIA:
-Forneça a legenda final ESTRITAMENTE dentro das tags <legenda> e </legenda>.
-
-Informações da Matéria:
-Título: ${tituloLimpo}
-Conteúdo da Matéria: ${textoCompletoMateria.substring(0, 4000)}`;
-
-  try {
-    const resOpenAI = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKeyOpenAI}`
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "Você é o editor-chefe do Central Goiano. Sua obrigação é redigir legendas robostas, ricas e aprofundadas (entre 1200 e 1800 caracteres) exclusivamente sobre a matéria fornecida. Proibido emojis." },
-          { role: "user", content: promptOpenAI }
-        ],
-        temperature: 0.6,
-        max_tokens: 1800
-      })
-    });
-
-    const data = await resOpenAI.json();
-    if (data.choices && data.choices[0] && data.choices[0].message) {
-      return extrairApenasLegenda(data.choices[0].message.content);
-    } else {
-      console.error("Erro no retorno da OpenAI:", data);
-    }
-  } catch (err) {
-    console.error("Erro no ChatGPT (Primário):", err);
-  }
-  return "";
-}
-
-// 2️⃣ SECUNDÁRIO: Função de Fallback com Gemini caso o ChatGPT falhe
-async function gerarLegendaGemini(tituloLimpo, textoCompletoMateria, apiKeyGemini) {
+// Geração de Legenda com Gemini + Pesquisa na Web (Google Search Grounding)
+async function gerarLegendaGeminiComBusca(tituloLimpo, textoCompletoMateria, apiKeyGemini) {
   if (!apiKeyGemini) {
-    console.error("⚠️ GEMINI_API_KEY não configurada!");
+    console.error("⚠️ GEMINI_API_KEY não configurada nas variáveis de ambiente!");
     return "";
   }
 
-  const promptGemini = `Você é o jornalista sênior e editor-chefe do portal Central Goiano. Escreva uma legenda de Instagram completa, longa, robusta e aprofundada (entre 1.200 e 1.800 caracteres) em Português do Brasil sobre:
+  // Descobre dinamicamente os modelos disponíveis
+  let modelos = ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-pro'];
+  try {
+    const resModels = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKeyGemini}`);
+    if (resModels.ok) {
+      const dataModels = await resModels.json();
+      if (dataModels.models && Array.isArray(dataModels.models)) {
+        let disponiveis = dataModels.models
+          .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+          .map(m => m.name.replace('models/', ''))
+          .sort((a, b) => b.localeCompare(a));
+        if (disponiveis.length > 0) modelos = disponiveis;
+      }
+    }
+  } catch (errModels) {
+    console.log("⚠️ Usando lista padrão de modelos Gemini.");
+  }
 
-Título: ${tituloLimpo}
-Conteúdo: ${textoCompletoMateria.substring(0, 4000)}
+  const prompt = `Você é o jornalista sênior e editor-chefe do portal Central Goiano. Sua missão é fazer uma pesquisa na web sobre este assunto, aprofundar os fatos e escrever uma legenda de Instagram extremamente rica, detalhada, analítica e de alto nível jornalístico.
 
-Regras:
-1. Desenvolva o contexto jornalístico detalhadamente em 4 a 5 parágrafos.
-2. Tom formal, sem emojis, sem citar portais concorrentes.
-3. Rodapé obrigatório:
+DIRETRIZES OBRIGATÓRIAS:
+1. PESQUISE NA WEB: Utilize a ferramenta de busca para encontrar o contexto real, dados históricos e desdobramentos recentes sobre o tema abaixo.
+2. ESTRUTURA: Escreva um texto longo, robusto e bem organizado em 4 a 5 parágrafos.
+3. TOM: Estritamente jornalístico, formal, sóbrio e informativo. NUNCA utilize emojis.
+4. EXCLUSIVIDADE: NUNCA cite nomes de fontes externas ou portais concorrentes (G1, Metrópoles, etc.). O conteúdo pertence exclusivamente ao Central Goiano.
+5. RODAPÉ OBRIGATÓRIO (Insira exatamente como abaixo ao final do texto):
+
 Para mais informações, acesse: www.centralgoiano.com.br
 
 Tem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.
 
-Retorne ESTRITAMENTE entre <legenda> e </legenda>.`;
+#CentralGoiano #Noticias #Goiás
 
-  try {
-    const resGemini = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKeyGemini}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: promptGemini }] }],
-        generationConfig: { temperature: 0.5, maxOutputTokens: 2048 }
-      })
-    });
+REGRA OBRIGATÓRIA DE SAÍDA:
+Coloque o texto final da legenda ESTRITAMENTE dentro das tags <legenda> e </legenda>. Não escreva nada fora delas.
 
-    let dataGemini = await resGemini.json();
-    if (dataGemini.candidates && dataGemini.candidates[0] && dataGemini.candidates[0].content) {
-      let textoBruto = dataGemini.candidates[0].content.parts[0].text;
-      return extrairApenasLegenda(textoBruto);
+Título da Matéria: ${tituloLimpo}
+Texto de Apoio: ${textoCompletoMateria.substring(0, 3000)}`;
+
+  for (const modelo of modelos) {
+    try {
+      const URL_API = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKeyGemini}`;
+      
+      const response = await fetch(URL_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          // Ativa a ferramenta de pesquisa na web do Google no Gemini
+          tools: [{ google_search: {} }],
+          system_instruction: {
+            parts: [{ 
+              text: "Você é o editor-chefe do portal Central Goiano. Pesquise na web e redija legendas jornalísticas profundas, exclusivas e sem emojis. Sua única saída deve ser a legenda contida entre <legenda> e </legenda>." 
+            }]
+          },
+          contents: [{
+            parts: [{ text: prompt }]
+          }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 2048
+          }
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
+        let textoBruto = data.candidates[0].content.parts[0].text;
+        let resultado = extrairApenasLegenda(textoBruto);
+        if (resultado && resultado.length > 100) {
+          console.log(`✅ Legenda robusta gerada com sucesso via Gemini (${modelo}) com pesquisa web!`);
+          return resultado;
+        }
+      }
+    } catch (err) {
+      console.error(`Erro com o modelo ${modelo}:`, err.message);
     }
-  } catch (err) {
-    console.error("Erro no Gemini (Secundário):", err);
   }
+
   return "";
 }
 
@@ -292,19 +278,13 @@ app.post('/gerar-card', async (req, res) => {
 
     const publicImageUrl = `${req.protocol}://${req.get('host')}/temp/${fileName}`;
 
-    // 1️⃣ TENTATIVA PRINCIPAL: CHATGPT (OpenAI)
-    console.log("🤖 Gerando legenda via ChatGPT (Primário)...");
-    let legendaFinal = await gerarLegendaChatGPT(tituloLimpo, textoBaseMateria);
+    // GERAÇÃO DA LEGENDA COM PESQUISA NA WEB E PADRÃO INSTITUCIONAL
+    console.log("🔍 Acionando Gemini com Pesquisa na Web e Padrão Central Goiano...");
+    let legendaFinal = await gerarLegendaGeminiComBusca(tituloLimpo, textoBaseMateria, API_KEY_GEMINI);
 
-    // 2️⃣ TENTATIVA SECUNDÁRIA: GEMINI (Caso ChatGPT falhe ou venha muito curto)
-    if (!legendaFinal || legendaFinal.length < 200) {
-      console.log("⚠️ ChatGPT não respondeu adequadamente. Acionando Gemini (Secundário)...");
-      legendaFinal = await gerarLegendaGemini(tituloLimpo, textoBaseMateria, API_KEY_GEMINI);
-    }
-
-    // 3️⃣ FALLBACK DE SEGURANÇA EXTREMA
-    if (!legendaFinal || legendaFinal.length < 200) {
-      legendaFinal = `${tituloLimpo}\n\nO tema em questão traz à tona desdobramentos significativos e exige uma análise aprofundada sobre os fatores envolvidos. O assunto repercute diretamente entre especialistas e a comunidade.\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.`;
+    // Fallback dinâmico seguro caso ocorra qualquer instabilidade na API do Google
+    if (!legendaFinal || legendaFinal.length < 50) {
+      legendaFinal = `${tituloLimpo}\n\nA cobertura completa sobre este assunto traz importantes desdobramentos para a região e exige atenção aos detalhes dos fatos abordados.\n\nPara mais informações, acesse: www.centralgoiano.com.br\n\nTem uma informação ou vídeo exclusivo? Envie para o Central Goiano pelo WhatsApp (64) 9 8179-1016.\n\n#CentralGoiano #Noticias #Goiás`;
     }
 
     // POSTAGEM NO INSTAGRAM
