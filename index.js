@@ -9,6 +9,27 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use('/temp', express.static('/tmp'));
 
+// ==================== FILA DE PROCESSAMENTO SEQUENCIAL ====================
+const queue = [];
+let isProcessingQueue = false;
+
+async function processQueue() {
+  if (isProcessingQueue || queue.length === 0) return;
+  isProcessingQueue = true;
+
+  const item = queue.shift();
+  try {
+    await processarCardEInstagramEmSegundoPlano(item.body, item.protocol, item.host);
+  } catch (err) {
+    console.error("❌ Erro ao processar item da fila:", err);
+  }
+
+  isProcessingQueue = false;
+  // Aguarda 3 segundos antes de processar o próximo card para evitar sobrecarga
+  setTimeout(processQueue, 3000);
+}
+// ============================================================================
+
 function limparTextoLixo(str) {
   if (!str) return "";
   let limpo = str
@@ -124,7 +145,6 @@ Conteúdo da Matéria: ${textoCompletoMateria.substring(0, 4000)}`;
   return "";
 }
 
-// FUNÇÃO PESADA PROCESSADA EM SEGUNDO PLANO
 async function processarCardEInstagramEmSegundoPlano(reqBody, protocol, host) {
   const { titulo, subtitulo, imagemUrl, textoMateria } = reqBody;
 
@@ -140,7 +160,7 @@ async function processarCardEInstagramEmSegundoPlano(reqBody, protocol, host) {
 
   let browser = null;
   try {
-    console.log(`🚀 Iniciando processamento em segundo plano para: "${tituloLimpo}"`);
+    console.log(`🚀 [Fila] Iniciando processamento para: "${tituloLimpo}"`);
     const executablePath = await chromium.executablePath();
     browser = await puppeteer.launch({
       args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
@@ -274,14 +294,20 @@ app.post('/gerar-card', (req, res) => {
     });
   }
 
-  // Responde IMEDIATAMENTE ao Apps Script em milissegundos
+  // Responde IMEDIATAMENTE ao Apps Script
   res.json({
     sucesso: true,
-    mensagem: "Processamento do Card e Instagram iniciado em segundo plano."
+    mensagem: "Processamento enfileirado com sucesso."
   });
 
-  // Executa todo o processo pesado sem prender o Apps Script
-  processarCardEInstagramEmSegundoPlano(req.body, req.protocol, req.get('host'));
+  // Adiciona o pedido à fila de execução sequencial
+  queue.push({
+    body: req.body,
+    protocol: req.protocol,
+    host: req.get('host')
+  });
+
+  processQueue();
 });
 
 const PORT = process.env.PORT || 10000;
