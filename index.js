@@ -5,7 +5,7 @@ async function gerarLegendaGeminiOficial(tituloLimpo, textoCompletoMateria, apiK
     return "";
   }
 
-  let modelos = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+  let modelos = ['gemini-1.5-flash', 'gemini-1.5-pro'];
   try {
     const resModels = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKeyGemini}`);
     if (resModels.ok) {
