@@ -310,6 +310,11 @@ app.post('/gerar-card', (req, res) => {
   processQueue();
 });
 
+// Rota de verificação simples para ferramentas de monitoramento de Uptime
+app.get('/', (req, res) => {
+  res.status(200).send("OK");
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
