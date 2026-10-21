@@ -310,7 +310,7 @@ app.post('/gerar-card', (req, res) => {
   processQueue();
 });
 
-// Rota de verificação simples para ferramentas de monitoramento de Uptime
+// Apenas a rota GET adicionada para o UptimeRobot manter o Render acordado
 app.get('/', (req, res) => {
   res.status(200).send("OK");
 });
